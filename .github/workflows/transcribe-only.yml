@@ -30,7 +30,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install Python deps
-        run: pip install openai-whisper
+        run: |
+          pip install faster-whisper --timeout 120 || \
+          pip install openai-whisper --timeout 120
 
       - name: Transcribe
         run: python3 transcribe.py '${{ inputs.whisper_model }}'
