@@ -26,7 +26,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python deps
         run: pip install openai-whisper
 
       - name: Transcribe
