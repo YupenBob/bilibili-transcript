@@ -7,13 +7,14 @@ try:
     from faster_whisper import WhisperModel
     print(f"Loading faster-whisper model: {model_name}")
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    print(f"Transcribing audio.wav with model={model_name}")
+    result = model.transcribe("audio.wav", language="zh")
 except Exception as e:
     print(f"faster-whisper failed: {e}, trying openai-whisper")
     import whisper
     model = whisper.load_model(model_name)
-
-print(f"Transcribing audio.wav with model={model_name}")
-result = model.transcribe("audio.wav", language="zh", verbose=False, beam_size=5)
+    print(f"Transcribing audio.wav with model={model_name}")
+    result = model.transcribe("audio.wav", language="zh", verbose=False)
 
 with open("transcript_full.txt", "w", encoding="utf-8") as f:
     f.write(result["text"])
