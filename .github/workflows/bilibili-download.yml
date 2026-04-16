@@ -32,8 +32,12 @@ jobs:
   download-and-transcribe:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - uses: actions/setup-python@v5
         with:
@@ -86,3 +90,13 @@ jobs:
           name: video
           path: "*.mp4 *.flv *.mkv *.srt *.vtt"
           retention-days: 7
+
+      - name: Commit result
+        if: inputs.commit_result == true
+        shell: bash
+        run: |
+          git config --local user.email "bot@github.com"
+          git config --local user.name "Clover"
+          git add -A
+          git diff --staged --quiet || git commit -m "transcript $(date +%Y-%m-%d)"
+          git push
