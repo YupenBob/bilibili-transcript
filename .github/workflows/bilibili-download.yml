@@ -42,8 +42,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install yt-dlp you-get whisper
+        run: pip install yt-dlp you-get whisper
 
       - name: Install ffmpeg
         run: |
@@ -57,77 +56,52 @@ jobs:
           echo "Cookies decoded: $(wc -l < cookies.txt) lines"
 
       - name: Download video
-        id: download
         run: |
           echo "📥 Downloading: ${{ inputs.video_url }}"
-          
           if [ -f cookies.txt ]; then
-            echo "Using cookies for authenticated download..."
-            yt-dlp \
-              --cookies cookies.txt \
-              --write-auto-sub \
-              --sub-langs 'zh,zh-CN,zh-TW,en' \
-              --convert-subs srt \
-              -o '%(title)s.%(ext)s' \
-              '${{ inputs.video_url }}' || true
+            yt-dlp --cookies cookies.txt --write-auto-sub --sub-langs 'zh,zh-CN,zh-TW,en' --convert-subs srt -o '%(title)s.%(ext)s' '${{ inputs.video_url }}' || true
           fi
-          
-          # Fallback without cookies
-          yt-dlp \
-            --write-auto-sub \
-            --sub-langs 'zh,zh-CN,zh-TW,en' \
-            --convert-subs srt \
-            -o '%(title)s.%(ext)s' \
-            '${{ inputs.video_url }}' || true
-          
-          echo "title=${{ steps.download.outputs.title }}" >> $GITHUB_OUTPUT 2>/dev/null || true
-          
+          yt-dlp --write-auto-sub --sub-langs 'zh,zh-CN,zh-TW,en' --convert-subs srt -o '%(title)s.%(ext)s' '${{ inputs.video_url }}' || true
           ls -lh
 
       - name: Extract audio
         run: |
-          VIDEO_FILE=$(find . -maxdepth 1 -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" | head -1)
+          VIDEO_FILE=$(find . -maxdepth 1 \( -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" \) | head -1)
           if [ -n "$VIDEO_FILE" ]; then
             echo "🎵 Extracting audio from: $VIDEO_FILE"
             ffmpeg -i "$VIDEO_FILE" -ar 16000 -ac 1 -c:a pcm_s16le audio.wav -y
-            echo "audio_file=audio.wav" >> $GITHUB_OUTPUT
           else
-            echo "No video file found, checking for subtitle files..."
+            echo "⚠️ No video file found"
             find . -name "*.srt" -o -name "*.vtt" | head -5
           fi
 
       - name: Run Whisper transcription
-        if: hash -r audio.wav 2>/dev/null || [ -f audio.wav ]
         run: |
           if [ -f audio.wav ]; then
-            echo "🎙️ Running Whisper (${{ inputs.whisper_model }}) transcription..."
-            python3 << 'PYEOF'
+            echo "🎙️ Running Whisper (${{ inputs.whisper_model }})..."
+            python3 -c "
 import whisper
 import json
-import sys
 
-model = whisper.load_model("${{ inputs.whisper_model }}")
-result = model.transcribe("audio.wav", language="zh", verbose=True)
+model = whisper.load_model('${{ inputs.whisper_model }}')
+result = model.transcribe('audio.wav', language='zh', verbose=False)
 
-# Save full transcript
-with open("transcript_full.txt", "w", encoding="utf-8") as f:
-    f.write(result["text"])
+with open('transcript_full.txt', 'w', encoding='utf-8') as f:
+    f.write(result['text'])
 
-# Save with timestamps
-segments = result.get("segments", [])
-with open("transcript_segmented.txt", "w", encoding="utf-8") as f:
+segments = result.get('segments', [])
+with open('transcript_segmented.txt', 'w', encoding='utf-8') as f:
     for seg in segments:
-        start = seg.get("start", 0)
-        end = seg.get("end", 0)
-        text = seg.get("text", "").strip()
-        f.write(f"[{start:.2f}s -> {end:.2f}s] {text}\n")
+        start = seg.get('start', 0)
+        end = seg.get('end', 0)
+        text = seg.get('text', '').strip()
+        f.write(f'[{start:.2f}s -> {end:.2f}s] {text}\n')
 
-print(f"✅ Transcript saved: {len(segments)} segments")
-
-# Save as JSON too
-with open("transcript.json", "w", encoding="utf-8") as f:
+with open('transcript.json', 'w', encoding='utf-8') as f:
     json.dump(result, f, ensure_ascii=False, indent=2)
-PYEOF
+
+print(f'✅ Transcript saved: {len(segments)} segments')
+"
           else
             echo "⚠️ No audio file found, skipping Whisper"
           fi
@@ -140,11 +114,9 @@ PYEOF
           echo "**Whisper Model:** \`${{ inputs.whisper_model }}\`" >> summary.md
           echo "" >> summary.md
           echo "## 📁 Output Files" >> summary.md
-          echo "" >> summary.md
-          for f in *.txt *.json *.wav *.mp4 *.flv *.mkv 2>/dev/null; do
+          for f in transcript_full.txt transcript_segmented.txt transcript.json audio.wav; do
             if [ -f "$f" ]; then
-              size=$(du -h "$f" | cut -f1)
-              echo "- \`$f\` ($size)" >> summary.md
+              echo "- \`$f\` ($(du -h "$f" | cut -f1))" >> summary.md
             fi
           done
           echo "" >> summary.md
@@ -164,11 +136,9 @@ PYEOF
             transcript.json
             summary.md
             audio.wav
-            *.srt
-            *.vtt
           retention-days: 30
 
-      - name: Upload video (short name, 7 days)
+      - name: Upload video
         uses: actions/upload-artifact@v4
         with:
           name: bilibili-video
@@ -176,14 +146,15 @@ PYEOF
             *.mp4
             *.flv
             *.mkv
+            *.srt
+            *.vtt
           retention-days: 7
 
-      - name: Commit result to repo
+      - name: Commit result
         if: inputs.commit_result == true
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
           git add -A
-          git diff --staged --quiet || git commit -m "📥 $(date +%Y-%m-%d) transcript: ${{ inputs.video_url }}"
+          git diff --staged --quiet || git commit -m "📥 $(date +%Y-%m-%d) transcript"
           git push
