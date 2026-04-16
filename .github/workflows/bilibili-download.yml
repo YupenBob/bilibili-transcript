@@ -45,19 +45,15 @@ jobs:
         run: pip install yt-dlp you-get whisper
 
       - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Decode cookies
         if: inputs.cookies_b64 != ''
-        run: |
-          echo '${{ inputs.cookies_b64 }}' | base64 -d > cookies.txt
-          echo "Cookies decoded: $(wc -l < cookies.txt) lines"
+        run: echo '${{ inputs.cookies_b64 }}' | base64 -d > cookies.txt
 
       - name: Download video
         run: |
-          echo "📥 Downloading: ${{ inputs.video_url }}"
+          echo "Downloading: ${{ inputs.video_url }}"
           if [ -f cookies.txt ]; then
             yt-dlp --cookies cookies.txt --write-auto-sub --sub-langs 'zh,zh-CN,zh-TW,en' --convert-subs srt -o '%(title)s.%(ext)s' '${{ inputs.video_url }}' || true
           fi
@@ -68,63 +64,17 @@ jobs:
         run: |
           VIDEO_FILE=$(find . -maxdepth 1 \( -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" \) | head -1)
           if [ -n "$VIDEO_FILE" ]; then
-            echo "🎵 Extracting audio from: $VIDEO_FILE"
+            echo "Extracting audio from: $VIDEO_FILE"
             ffmpeg -i "$VIDEO_FILE" -ar 16000 -ac 1 -c:a pcm_s16le audio.wav -y
-          else
-            echo "⚠️ No video file found"
-            find . -name "*.srt" -o -name "*.vtt" | head -5
           fi
 
-      - name: Run Whisper transcription
+      - name: Run Whisper
         run: |
           if [ -f audio.wav ]; then
-            echo "🎙️ Running Whisper (${{ inputs.whisper_model }})..."
-            python3 -c "
-import whisper
-import json
-
-model = whisper.load_model('${{ inputs.whisper_model }}')
-result = model.transcribe('audio.wav', language='zh', verbose=False)
-
-with open('transcript_full.txt', 'w', encoding='utf-8') as f:
-    f.write(result['text'])
-
-segments = result.get('segments', [])
-with open('transcript_segmented.txt', 'w', encoding='utf-8') as f:
-    for seg in segments:
-        start = seg.get('start', 0)
-        end = seg.get('end', 0)
-        text = seg.get('text', '').strip()
-        f.write(f'[{start:.2f}s -> {end:.2f}s] {text}\n')
-
-with open('transcript.json', 'w', encoding='utf-8') as f:
-    json.dump(result, f, ensure_ascii=False, indent=2)
-
-print(f'✅ Transcript saved: {len(segments)} segments')
-"
+            python3 transcribe.py '${{ inputs.whisper_model }}'
           else
-            echo "⚠️ No audio file found, skipping Whisper"
+            echo "No audio file found"
           fi
-
-      - name: Generate summary
-        run: |
-          echo "# 📋 Bilibili Download + Transcript Summary" > summary.md
-          echo "" >> summary.md
-          echo "**Video URL:** \`${{ inputs.video_url }}\`" >> summary.md
-          echo "**Whisper Model:** \`${{ inputs.whisper_model }}\`" >> summary.md
-          echo "" >> summary.md
-          echo "## 📁 Output Files" >> summary.md
-          for f in transcript_full.txt transcript_segmented.txt transcript.json audio.wav; do
-            if [ -f "$f" ]; then
-              echo "- \`$f\` ($(du -h "$f" | cut -f1))" >> summary.md
-            fi
-          done
-          echo "" >> summary.md
-          echo "## 📝 Transcript Preview (first 500 chars)" >> summary.md
-          echo '```' >> summary.md
-          head -c 500 transcript_full.txt 2>/dev/null || echo "(no transcript)" >> summary.md
-          echo '```' >> summary.md
-          cat summary.md
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -134,7 +84,6 @@ print(f'✅ Transcript saved: {len(segments)} segments')
             transcript_full.txt
             transcript_segmented.txt
             transcript.json
-            summary.md
             audio.wav
           retention-days: 30
 
@@ -156,5 +105,5 @@ print(f'✅ Transcript saved: {len(segments)} segments')
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add -A
-          git diff --staged --quiet || git commit -m "📥 $(date +%Y-%m-%d) transcript"
+          git diff --staged --quiet || git commit -m "transcript $(date +%Y-%m-%d)"
           git push
