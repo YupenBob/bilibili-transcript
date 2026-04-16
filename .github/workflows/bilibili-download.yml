@@ -1,0 +1,189 @@
+name: Bilibili Video Download + Transcript
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'B站视频 URL'
+        required: true
+        type: string
+      cookies_b64:
+        description: 'B站 Cookies (Base64编码，可选)'
+        required: false
+        type: string
+      whisper_model:
+        description: 'Whisper 模型'
+        required: false
+        type: choice
+        default: 'base'
+        options:
+          - 'tiny'
+          - 'base'
+          - 'small'
+          - 'medium'
+          - 'large'
+      commit_result:
+        description: '自动提交结果到仓库?'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  download-and-transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install yt-dlp you-get whisper
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Decode cookies
+        if: inputs.cookies_b64 != ''
+        run: |
+          echo '${{ inputs.cookies_b64 }}' | base64 -d > cookies.txt
+          echo "Cookies decoded: $(wc -l < cookies.txt) lines"
+
+      - name: Download video
+        id: download
+        run: |
+          echo "📥 Downloading: ${{ inputs.video_url }}"
+          
+          if [ -f cookies.txt ]; then
+            echo "Using cookies for authenticated download..."
+            yt-dlp \
+              --cookies cookies.txt \
+              --write-auto-sub \
+              --sub-langs 'zh,zh-CN,zh-TW,en' \
+              --convert-subs srt \
+              -o '%(title)s.%(ext)s' \
+              '${{ inputs.video_url }}' || true
+          fi
+          
+          # Fallback without cookies
+          yt-dlp \
+            --write-auto-sub \
+            --sub-langs 'zh,zh-CN,zh-TW,en' \
+            --convert-subs srt \
+            -o '%(title)s.%(ext)s' \
+            '${{ inputs.video_url }}' || true
+          
+          echo "title=${{ steps.download.outputs.title }}" >> $GITHUB_OUTPUT 2>/dev/null || true
+          
+          ls -lh
+
+      - name: Extract audio
+        run: |
+          VIDEO_FILE=$(find . -maxdepth 1 -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" | head -1)
+          if [ -n "$VIDEO_FILE" ]; then
+            echo "🎵 Extracting audio from: $VIDEO_FILE"
+            ffmpeg -i "$VIDEO_FILE" -ar 16000 -ac 1 -c:a pcm_s16le audio.wav -y
+            echo "audio_file=audio.wav" >> $GITHUB_OUTPUT
+          else
+            echo "No video file found, checking for subtitle files..."
+            find . -name "*.srt" -o -name "*.vtt" | head -5
+          fi
+
+      - name: Run Whisper transcription
+        if: hash -r audio.wav 2>/dev/null || [ -f audio.wav ]
+        run: |
+          if [ -f audio.wav ]; then
+            echo "🎙️ Running Whisper (${{ inputs.whisper_model }}) transcription..."
+            python3 << 'PYEOF'
+import whisper
+import json
+import sys
+
+model = whisper.load_model("${{ inputs.whisper_model }}")
+result = model.transcribe("audio.wav", language="zh", verbose=True)
+
+# Save full transcript
+with open("transcript_full.txt", "w", encoding="utf-8") as f:
+    f.write(result["text"])
+
+# Save with timestamps
+segments = result.get("segments", [])
+with open("transcript_segmented.txt", "w", encoding="utf-8") as f:
+    for seg in segments:
+        start = seg.get("start", 0)
+        end = seg.get("end", 0)
+        text = seg.get("text", "").strip()
+        f.write(f"[{start:.2f}s -> {end:.2f}s] {text}\n")
+
+print(f"✅ Transcript saved: {len(segments)} segments")
+
+# Save as JSON too
+with open("transcript.json", "w", encoding="utf-8") as f:
+    json.dump(result, f, ensure_ascii=False, indent=2)
+PYEOF
+          else
+            echo "⚠️ No audio file found, skipping Whisper"
+          fi
+
+      - name: Generate summary
+        run: |
+          echo "# 📋 Bilibili Download + Transcript Summary" > summary.md
+          echo "" >> summary.md
+          echo "**Video URL:** \`${{ inputs.video_url }}\`" >> summary.md
+          echo "**Whisper Model:** \`${{ inputs.whisper_model }}\`" >> summary.md
+          echo "" >> summary.md
+          echo "## 📁 Output Files" >> summary.md
+          echo "" >> summary.md
+          for f in *.txt *.json *.wav *.mp4 *.flv *.mkv 2>/dev/null; do
+            if [ -f "$f" ]; then
+              size=$(du -h "$f" | cut -f1)
+              echo "- \`$f\` ($size)" >> summary.md
+            fi
+          done
+          echo "" >> summary.md
+          echo "## 📝 Transcript Preview (first 500 chars)" >> summary.md
+          echo '```' >> summary.md
+          head -c 500 transcript_full.txt 2>/dev/null || echo "(no transcript)" >> summary.md
+          echo '```' >> summary.md
+          cat summary.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-transcript-results
+          path: |
+            transcript_full.txt
+            transcript_segmented.txt
+            transcript.json
+            summary.md
+            audio.wav
+            *.srt
+            *.vtt
+          retention-days: 30
+
+      - name: Upload video (short name, 7 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-video
+          path: |
+            *.mp4
+            *.flv
+            *.mkv
+          retention-days: 7
+
+      - name: Commit result to repo
+        if: inputs.commit_result == true
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add -A
+          git diff --staged --quiet || git commit -m "📥 $(date +%Y-%m-%d) transcript: ${{ inputs.video_url }}"
+          git push
