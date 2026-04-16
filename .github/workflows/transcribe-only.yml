@@ -41,5 +41,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: transcript
-          path: transcript_full.txt,transcript_segmented.txt,transcript.json
+          path: |
+            transcript_full.txt
+            transcript_segmented.txt
+            transcript.json
           retention-days: 30
