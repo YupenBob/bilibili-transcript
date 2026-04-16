@@ -1,0 +1,40 @@
+name: Transcribe Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_model:
+        description: 'Whisper 模型'
+        required: false
+        type: choice
+        default: 'small'
+        options:
+          - 'tiny'
+          - 'base'
+          - 'small'
+          - 'medium'
+          - 'large'
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install openai-whisper
+
+      - name: Transcribe
+        run: python3 transcribe.py '${{ inputs.whisper_model }}'
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript
+          path: transcript_full.txt,transcript_segmented.txt,transcript.json
+          retention-days: 30
