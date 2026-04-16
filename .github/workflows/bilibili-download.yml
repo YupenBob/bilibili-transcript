@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       cookies_b64:
-        description: 'B站 Cookies (Base64编码，可选)'
+        description: 'Cookies (Base64)'
         required: false
         type: string
       whisper_model:
@@ -23,7 +23,7 @@ on:
           - 'medium'
           - 'large'
       commit_result:
-        description: '自动提交结果到仓库?'
+        description: '自动提交结果?'
         required: false
         type: boolean
         default: false
@@ -33,77 +33,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yt-dlp you-get whisper
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: pip install yt-dlp openai-whisper ffmpeg-python
 
       - name: Decode cookies
         if: inputs.cookies_b64 != ''
         run: echo '${{ inputs.cookies_b64 }}' | base64 -d > cookies.txt
 
       - name: Download video
+        shell: bash
         run: |
-          echo "Downloading: ${{ inputs.video_url }}"
+          URL="${{ inputs.video_url }}"
           if [ -f cookies.txt ]; then
-            yt-dlp --cookies cookies.txt --write-auto-sub --sub-langs 'zh,zh-CN,zh-TW,en' --convert-subs srt -o '%(title)s.%(ext)s' '${{ inputs.video_url }}' || true
+            yt-dlp --cookies cookies.txt --user-agent "Mozilla/5.0" --write-auto-sub --sub-langs zh,zh-CN,zh-TW,en --convert-subs srt -o '%(title)s.%(ext)s' "$URL"
+          else
+            yt-dlp --write-auto-sub --sub-langs zh,zh-CN,zh-TW,en --convert-subs srt -o '%(title)s.%(ext)s' "$URL"
           fi
-          yt-dlp --write-auto-sub --sub-langs 'zh,zh-CN,zh-TW,en' --convert-subs srt -o '%(title)s.%(ext)s' '${{ inputs.video_url }}' || true
-          ls -lh
 
       - name: Extract audio
+        shell: bash
         run: |
-          VIDEO_FILE=$(find . -maxdepth 1 \( -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" \) | head -1)
-          if [ -n "$VIDEO_FILE" ]; then
-            echo "Extracting audio from: $VIDEO_FILE"
-            ffmpeg -i "$VIDEO_FILE" -ar 16000 -ac 1 -c:a pcm_s16le audio.wav -y
+          VIDEO=$(find . -maxdepth 1 \( -name "*.mp4" -o -name "*.flv" -o -name "*.mkv" \) | head -1)
+          if [ -n "$VIDEO" ]; then
+            ffmpeg -i "$VIDEO" -ar 16000 -ac 1 -c:a pcm_s16le audio.wav -y
           fi
 
-      - name: Run Whisper
-        run: |
-          if [ -f audio.wav ]; then
-            python3 transcribe.py '${{ inputs.whisper_model }}'
-          else
-            echo "No audio file found"
-          fi
+      - name: Transcribe
+        shell: bash
+        run: python3 transcribe.py '${{ inputs.whisper_model }}'
 
-      - name: Upload artifacts
+      - name: Upload results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: bilibili-transcript-results
-          path: |
-            transcript_full.txt
-            transcript_segmented.txt
-            transcript.json
-            audio.wav
+          name: results
+          path: transcript_full.txt,transcript_segmented.txt,transcript.json,audio.wav
           retention-days: 30
 
       - name: Upload video
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: bilibili-video
-          path: |
-            *.mp4
-            *.flv
-            *.mkv
-            *.srt
-            *.vtt
+          name: video
+          path: "*.mp4 *.flv *.mkv *.srt *.vtt"
           retention-days: 7
-
-      - name: Commit result
-        if: inputs.commit_result == true
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add -A
-          git diff --staged --quiet || git commit -m "transcript $(date +%Y-%m-%d)"
-          git push
